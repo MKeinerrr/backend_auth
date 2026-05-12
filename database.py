@@ -1,12 +1,10 @@
 import os
-import json
 import pymysql
-from pymysql import MySQLError
 
 from pymysql.cursors import DictCursor
 from dotenv import load_dotenv
 
-load_dotenv() # Carga las variables del archivo .env
+load_dotenv()  # Load environment variables from .env
 
 DB_HOST = os.getenv('DB_HOST', 'localhost')
 DB_USER = os.getenv('DB_USER', 'root')
@@ -53,75 +51,72 @@ def init_db() -> None:
         with connection.cursor() as cursor:
             cursor.execute(
                 '''
-                CREATE TABLE IF NOT EXISTS users (
-                    id INT NOT NULL AUTO_INCREMENT,
-                    nombre VARCHAR(255) NOT NULL,
-                    password_hash VARCHAR(255) NOT NULL,
-                    CONSTRAINT users_pk PRIMARY KEY (id),
-                    CONSTRAINT users__nombre__un UNIQUE (nombre)
+                CREATE TABLE IF NOT EXISTS usuarios (
+                    id_usuario INT NOT NULL AUTO_INCREMENT,
+                    identidad VARCHAR(100),
+                    num_identidad VARCHAR(20),
+                    nombre VARCHAR(150) NOT NULL,
+                    apellido VARCHAR(150) NOT NULL,
+                    usuario VARCHAR(50),
+                    correo VARCHAR(150) NOT NULL,
+                    telefono VARCHAR(30),
+                    direccion TEXT,
+                    clave VARCHAR(255) NOT NULL,
+                    token VARCHAR(150),
+                    verify BOOLEAN NOT NULL DEFAULT 0,
+                    rol INT NOT NULL DEFAULT 1,
+                    foto_url VARCHAR(255),
+                    estado BOOLEAN NOT NULL DEFAULT 1,
+                    fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT usuarios_pk PRIMARY KEY (id_usuario),
+                    CONSTRAINT usuarios__num_identidad__un UNIQUE (num_identidad),
+                    CONSTRAINT usuarios__usuario__un UNIQUE (usuario),
+                    CONSTRAINT usuarios__correo__un UNIQUE (correo),
+                    CONSTRAINT usuarios__rol__ck CHECK (rol IN (1, 2, 3))
                 )
                 '''
             )
 
-            # Migrate legacy schemas (username/password) to current schema.
-            cursor.execute('SHOW COLUMNS FROM users')
-            columns = {row['Field'] for row in cursor.fetchall()}
-
-            if 'nombre' not in columns and 'username' in columns:
-                cursor.execute(
-                    'ALTER TABLE users CHANGE COLUMN username nombre VARCHAR(255) NOT NULL'
+            cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS categorias (
+                    id_categoria INT NOT NULL AUTO_INCREMENT,
+                    nombre VARCHAR(100) NOT NULL,
+                    estado BOOLEAN NOT NULL DEFAULT 1,
+                    CONSTRAINT categorias_pk PRIMARY KEY (id_categoria),
+                    CONSTRAINT categorias__nombre__un UNIQUE (nombre),
+                    CONSTRAINT categorias__estado__ck CHECK (estado IN (0, 1))
                 )
-                columns.remove('username')
-                columns.add('nombre')
-
-            if 'password_hash' not in columns and 'password' in columns:
-                cursor.execute(
-                    'ALTER TABLE users CHANGE COLUMN password password_hash VARCHAR(255) NOT NULL'
-                )
-                columns.remove('password')
-                columns.add('password_hash')
-
-            if 'nombre' not in columns:
-                cursor.execute('ALTER TABLE users ADD COLUMN nombre VARCHAR(255) NOT NULL')
-
-            if 'password_hash' not in columns:
-                cursor.execute(
-                    'ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NOT NULL DEFAULT ""'
-                )
-
-            # Keep older environments compatible when constraint names differ.
-            cursor.execute('SHOW INDEX FROM users WHERE Key_name = "users__nombre__un"')
-            if cursor.fetchone() is None:
-                try:
-                    cursor.execute(
-                        'ALTER TABLE users ADD CONSTRAINT users__nombre__un UNIQUE (nombre)'
-                    )
-                except MySQLError:
-                    pass
+                '''
+            )
 
             cursor.execute(
                 '''
                 CREATE TABLE IF NOT EXISTS salones (
-                    id INT NOT NULL AUTO_INCREMENT,
-                    nombre VARCHAR(255) NOT NULL,
+                    id_salon INT NOT NULL AUTO_INCREMENT,
+                    nombre VARCHAR(150) NOT NULL,
                     zona VARCHAR(100) NOT NULL,
+                    nivel INT,
                     capacidad INT NOT NULL,
                     precio DECIMAL(10, 2) NOT NULL,
-                    tipo VARCHAR(20) NOT NULL,
-                    disponible TINYINT(1) NOT NULL DEFAULT 1,
-                    calificacion DECIMAL(2, 1),
-                    distancia_km DECIMAL(5, 2),
-                    CONSTRAINT salones_pk PRIMARY KEY (id),
+                    slug VARCHAR(200) NOT NULL,
+                    foto VARCHAR(255),
+                    video TEXT,
+                    descripcion TEXT NOT NULL,
+                    politicas TEXT,
+                    estado BOOLEAN NOT NULL DEFAULT 1,
+                    fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    id_categoria INT NOT NULL,
+                    CONSTRAINT salones_pk PRIMARY KEY (id_salon),
+                    CONSTRAINT salones__slug__un UNIQUE (slug),
+                    CONSTRAINT salones__nivel__ck CHECK (nivel > 0),
                     CONSTRAINT salones__capacidad__ck CHECK (capacidad > 0),
                     CONSTRAINT salones__precio__ck CHECK (precio >= 0),
-                    CONSTRAINT salones__tipo__ck CHECK (
-                        tipo = 'Fiestas'
-                        OR tipo = 'Corporativo'
-                        OR tipo = 'Conferencias'
-                        OR tipo = 'Reuniones'
-                    ),
-                    CONSTRAINT salones__disponible__ck CHECK (disponible = 0 OR disponible = 1),
-                    CONSTRAINT salones__calificacion__ck CHECK (calificacion >= 0 AND calificacion <= 5)
+                    CONSTRAINT salones__estado__ck CHECK (estado IN (0, 1)),
+                    CONSTRAINT salones__id_categoria__fk
+                        FOREIGN KEY (id_categoria)
+                        REFERENCES categorias(id_categoria)
+                        ON DELETE RESTRICT ON UPDATE CASCADE
                 )
                 '''
             )
@@ -129,178 +124,197 @@ def init_db() -> None:
             cursor.execute(
                 '''
                 CREATE TABLE IF NOT EXISTS salon_badges (
-                    id INT NOT NULL AUTO_INCREMENT,
-                    salon_id INT NOT NULL,
+                    id_salon_badge INT NOT NULL AUTO_INCREMENT,
+                    id_salon INT NOT NULL,
                     badge VARCHAR(100) NOT NULL,
-                    CONSTRAINT salon_badges_pk PRIMARY KEY (id),
-                    CONSTRAINT salon_badges__salon_id__fk
-                        FOREIGN KEY (salon_id) REFERENCES salones(id)
-                        ON DELETE RESTRICT
+                    CONSTRAINT salon_badges_pk PRIMARY KEY (id_salon_badge),
+                    CONSTRAINT salon_badges__salon__fk
+                        FOREIGN KEY (id_salon)
+                        REFERENCES salones(id_salon)
+                        ON DELETE CASCADE ON UPDATE CASCADE
                 )
                 '''
             )
 
-            cursor.execute('SELECT COUNT(*) AS total FROM salones')
-            salons_count = cursor.fetchone()['total']
-            if salons_count == 0:
-                seed_salons = [
-                    (
-                        'Salon Caribe',
-                        'Bocagrande',
-                        80,
-                        500000,
-                        'Fiestas',
-                        True,
-                        4.9,
-                        1.8,
-                    ),
-                    (
-                        'Salon Ejecutivo',
-                        'Centro',
-                        50,
-                        350000,
-                        'Corporativo',
-                        True,
-                        4.7,
-                        2.3,
-                    ),
-                    (
-                        'Salon Vista Mar',
-                        'Castillogrande',
-                        120,
-                        800000,
-                        'Fiestas',
-                        False,
-                        4.8,
-                        3.5,
-                    ),
-                    (
-                        'Salon Bolivar',
-                        'Manga',
-                        60,
-                        450000,
-                        'Conferencias',
-                        True,
-                        4.6,
-                        1.2,
-                    ),
-                    (
-                        'Salon Premier',
-                        'Zona Norte',
-                        200,
-                        1200000,
-                        'Fiestas',
-                        False,
-                        4.5,
-                        6.4,
-                    ),
-                ]
-                cursor.executemany(
-                    '''
-                    INSERT INTO salones (
-                        nombre,
-                        zona,
-                        capacidad,
-                        precio,
-                        tipo,
-                        disponible,
-                        calificacion,
-                        distancia_km
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ''',
-                    seed_salons,
-                )
-
-                seed_badges = [
-                    (1, 'Confirmación inmediata'),
-                    (1, 'Mas reservado'),
-                    (2, 'Mejor precio'),
-                    (3, 'Ultimos cupos'),
-                    (4, 'Disponible hoy'),
-                    (5, 'Premium'),
-                ]
-                cursor.executemany(
-                    'INSERT INTO salon_badges (salon_id, badge) VALUES (%s, %s)',
-                    seed_badges,
-                )
-
-            # Migrate legacy salones.badges JSON column to salon_badges table if present.
             cursor.execute(
                 '''
-                SELECT COUNT(*) AS total
-                FROM information_schema.columns
-                WHERE table_schema = %s
-                  AND table_name = 'salones'
-                  AND column_name = 'badges'
-                ''',
-                (DB_NAME,),
+                CREATE TABLE IF NOT EXISTS franjas_horarias (
+                    id_franja_horaria INT NOT NULL AUTO_INCREMENT,
+                    nombre VARCHAR(50) NOT NULL,
+                    hora_inicio TIME NOT NULL,
+                    hora_fin TIME NOT NULL,
+                    estado BOOLEAN NOT NULL DEFAULT 1,
+                    CONSTRAINT franjas_horarias_pk PRIMARY KEY (id_franja_horaria),
+                    CONSTRAINT franjas_horarias__nombre__un UNIQUE (nombre),
+                    CONSTRAINT franjas_horarias__hora__ck CHECK (hora_fin > hora_inicio),
+                    CONSTRAINT franjas_horarias__estado__ck CHECK (estado IN (0, 1))
+                )
+                '''
             )
-            has_legacy_badges_column = int(cursor.fetchone()['total']) > 0
 
-            if has_legacy_badges_column:
-                cursor.execute('SELECT COUNT(*) AS total FROM salon_badges')
-                badges_count = int(cursor.fetchone()['total'])
+            cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS metodos (
+                    id_metodo INT NOT NULL AUTO_INCREMENT,
+                    nombre VARCHAR(100) NOT NULL,
+                    estado BOOLEAN NOT NULL DEFAULT 1,
+                    CONSTRAINT metodos_pk PRIMARY KEY (id_metodo),
+                    CONSTRAINT metodos__nombre__un UNIQUE (nombre),
+                    CONSTRAINT metodos__estado__ck CHECK (estado IN (0, 1))
+                )
+                '''
+            )
 
-                if badges_count == 0:
-                    cursor.execute('SELECT id, badges FROM salones')
-                    rows = cursor.fetchall()
-                    migrated_badges: list[tuple[int, str]] = []
+            cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS usuarios_metodos (
+                    id_usuario_metodo INT NOT NULL AUTO_INCREMENT,
+                    id_usuario INT NOT NULL,
+                    id_metodo INT NOT NULL,
+                    alias VARCHAR(100),
+                    numero VARCHAR(80),
+                    estado BOOLEAN NOT NULL DEFAULT 1,
+                    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT usuarios_metodos_pk PRIMARY KEY (id_usuario_metodo),
+                    CONSTRAINT usuarios_metodos__estado__ck CHECK (estado IN (0, 1)),
+                    CONSTRAINT usuarios_metodos__un UNIQUE (id_usuario, id_metodo, numero),
+                    CONSTRAINT usuarios_metodos__id_usuario__fk
+                        FOREIGN KEY (id_usuario)
+                        REFERENCES usuarios(id_usuario)
+                        ON DELETE CASCADE ON UPDATE CASCADE,
+                    CONSTRAINT usuarios_metodos__id_metodo__fk
+                        FOREIGN KEY (id_metodo)
+                        REFERENCES metodos(id_metodo)
+                        ON DELETE RESTRICT ON UPDATE CASCADE
+                )
+                '''
+            )
 
-                    for row in rows:
-                        salon_id = int(row['id'])
-                        raw_badges = row.get('badges')
-                        parsed_badges: list[str]
-
-                        if isinstance(raw_badges, str) and raw_badges.strip():
-                            try:
-                                loaded = json.loads(raw_badges)
-                                if isinstance(loaded, list):
-                                    parsed_badges = [str(item).strip() for item in loaded]
-                                else:
-                                    parsed_badges = [str(loaded).strip()]
-                            except json.JSONDecodeError:
-                                parsed_badges = [raw_badges.strip()]
-                        else:
-                            parsed_badges = []
-
-                        for badge in parsed_badges:
-                            if badge:
-                                migrated_badges.append((salon_id, badge))
-
-                    if migrated_badges:
-                        cursor.executemany(
-                            'INSERT INTO salon_badges (salon_id, badge) VALUES (%s, %s)',
-                            migrated_badges,
-                        )
+            cursor.execute('SELECT COUNT(*) AS total FROM metodos')
+            total_row = cursor.fetchone()
+            if total_row and int(total_row['total']) == 0:
+                cursor.executemany(
+                    'INSERT INTO metodos (nombre, estado) VALUES (%s, 1)',
+                    [
+                        ('Tarjeta debito',),
+                        ('Tarjeta credito',),
+                        ('Nequi',),
+                        ('Bancolombia',),
+                        ('Daviplata',),
+                        ('PSE',),
+                    ],
+                )
 
             cursor.execute(
                 '''
                 CREATE TABLE IF NOT EXISTS reservas (
-                    id INT NOT NULL AUTO_INCREMENT,
+                    id_reserva INT NOT NULL AUTO_INCREMENT,
                     codigo VARCHAR(20) NOT NULL,
-                    usuario_id INT NOT NULL,
-                    salon_id INT NOT NULL,
-                    fecha DATE NOT NULL,
-                    hora VARCHAR(12) NOT NULL,
+                    subtotal DECIMAL(10, 2) NOT NULL,
+                    descuento DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+                    monto DECIMAL(10, 2) NOT NULL,
+                    abono DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+                    num_transaccion VARCHAR(50),
                     asistentes INT NOT NULL,
+                    motivo VARCHAR(255),
+                    garantia VARCHAR(100),
                     notas TEXT,
-                    estado VARCHAR(20) NOT NULL DEFAULT 'Confirmada',
+                    estado VARCHAR(20) NOT NULL DEFAULT 'Pendiente',
+                    fecha DATE NOT NULL,
                     creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    CONSTRAINT reservas_pk PRIMARY KEY (id),
+                    id_salon INT NOT NULL,
+                    id_usuario INT NOT NULL,
+                    id_franja_horaria INT NOT NULL,
+                    id_metodo INT,
+                    CONSTRAINT reservas_pk PRIMARY KEY (id_reserva),
                     CONSTRAINT reservas__codigo__un UNIQUE (codigo),
+                    CONSTRAINT reservas__salon_fecha_id_franja_horaria__un
+                        UNIQUE (id_salon, fecha, id_franja_horaria),
+                    CONSTRAINT reservas__subtotal__ck CHECK (subtotal >= 0),
+                    CONSTRAINT reservas__descuento__ck CHECK (descuento >= 0),
+                    CONSTRAINT reservas__monto__ck CHECK (monto >= 0),
+                    CONSTRAINT reservas__abono__ck CHECK (abono >= 0),
                     CONSTRAINT reservas__asistentes__ck CHECK (asistentes > 0),
-                    CONSTRAINT reservas__hora__ck CHECK (
-                        hora = 'Mañana' OR hora = 'Tarde' OR hora = 'Noche'
-                    ),
-                    CONSTRAINT reservas__estado__ck CHECK (
-                        estado = 'Confirmada' OR estado = 'Cancelada' OR estado = 'Pendiente'
-                    ),
-                    CONSTRAINT reservas__usuario_id__fk
-                        FOREIGN KEY (usuario_id) REFERENCES users(id)
-                        ON DELETE RESTRICT,
-                    CONSTRAINT reservas__salon_id__fk
-                        FOREIGN KEY (salon_id) REFERENCES salones(id)
-                        ON DELETE RESTRICT
+                    CONSTRAINT reservas__estado__ck
+                        CHECK (estado IN ('Pendiente', 'Confirmada', 'Cancelada')),
+                    CONSTRAINT reservas__id_salon__fk
+                        FOREIGN KEY (id_salon)
+                        REFERENCES salones(id_salon)
+                        ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT reservas__id_usuario__fk
+                        FOREIGN KEY (id_usuario)
+                        REFERENCES usuarios(id_usuario)
+                        ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT reservas__id_franja_horaria__fk
+                        FOREIGN KEY (id_franja_horaria)
+                        REFERENCES franjas_horarias(id_franja_horaria)
+                        ON DELETE RESTRICT ON UPDATE CASCADE,
+                    CONSTRAINT reservas__id_metodo__fk
+                        FOREIGN KEY (id_metodo)
+                        REFERENCES metodos(id_metodo)
+                        ON DELETE SET NULL ON UPDATE CASCADE
+                )
+                '''
+            )
+
+            cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS calificaciones (
+                    id_calificacion INT NOT NULL AUTO_INCREMENT,
+                    cantidad INT NOT NULL,
+                    comentario TEXT,
+                    fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    id_salon INT NOT NULL,
+                    id_usuario INT NOT NULL,
+                    CONSTRAINT calificacion_pk PRIMARY KEY (id_calificacion),
+                    CONSTRAINT calificaciones__salon_usuario__un
+                        UNIQUE (id_salon, id_usuario),
+                    CONSTRAINT calificaciones__cantidad__ck
+                        CHECK (cantidad >= 1 AND cantidad <= 5),
+                    CONSTRAINT calificaciones__id_salon__fk
+                        FOREIGN KEY (id_salon)
+                        REFERENCES salones(id_salon)
+                        ON DELETE CASCADE ON UPDATE CASCADE,
+                    CONSTRAINT calificaciones__id_usuario__fk
+                        FOREIGN KEY (id_usuario)
+                        REFERENCES usuarios(id_usuario)
+                        ON DELETE CASCADE ON UPDATE CASCADE
+                )
+                '''
+            )
+
+            cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS empresa (
+                    NIT VARCHAR(50) NOT NULL,
+                    nombre VARCHAR(255) NOT NULL,
+                    telefono VARCHAR(30) NOT NULL,
+                    direccion VARCHAR(255) NOT NULL,
+                    correo VARCHAR(150) NOT NULL,
+                    mensaje TEXT NOT NULL,
+                    politicas TEXT,
+                    facebook VARCHAR(255),
+                    twitter VARCHAR(255),
+                    instagram VARCHAR(255),
+                    whatsapp VARCHAR(50) NOT NULL,
+                    CONSTRAINT empresa_pk PRIMARY KEY (NIT)
+                )
+                '''
+            )
+
+            cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS periodos_cierre (
+                    id_periodo_cierre INT NOT NULL AUTO_INCREMENT,
+                    fecha_inicio DATE NOT NULL,
+                    fecha_fin DATE NOT NULL,
+                    motivo TEXT,
+                    estado BOOLEAN NOT NULL DEFAULT 1,
+                    fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT periodos_cierre_pk PRIMARY KEY (id_periodo_cierre),
+                    CONSTRAINT periodos_cierre__fechas__ck
+                        CHECK (fecha_fin >= fecha_inicio),
+                    CONSTRAINT periodos_cierre__estado__ck CHECK (estado IN (0, 1))
                 )
                 '''
             )

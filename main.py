@@ -2,7 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import init_db
 from routes.auth import router as auth_router
+from routes.billetera import router as billetera_router
+from routes.catalogos import router as catalogos_router
 from routes.salones import router as salones_router
+from routes.admin_panel import router as admin_router
 
 app = FastAPI()
 
@@ -21,4 +24,7 @@ def on_startup() -> None:
 
 
 app.include_router(auth_router, prefix='/auth')
+app.include_router(billetera_router, prefix='/billetera')
+app.include_router(catalogos_router)
 app.include_router(salones_router)
+app.include_router(admin_router, prefix='/admin')

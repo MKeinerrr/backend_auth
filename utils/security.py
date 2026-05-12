@@ -7,7 +7,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 
-JWT_SECRET = os.getenv('JWT_SECRET', 'mi-proyecto-flutter-2026-seguro')
+JWT_SECRET = os.getenv('JWT_SECRET')
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRE_MINUTES = int(os.getenv('JWT_EXPIRE_MINUTES', '1440'))
 

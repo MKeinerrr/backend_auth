@@ -41,17 +41,21 @@ Ejemplo recomendado: (No es el del proyecto)
 ```env
 DB_HOST=localhost
 DB_USER=root
-DB_PASSWORD=1234
+DB_PASSWORD=tu_password
 DB_NAME=bd_sistema_reserva
 DB_PORT=3306
 
 JWT_SECRET=secreto-este-secreto-este-secreto
 JWT_EXPIRE_MINUTES=1440
+
+# Origenes permitidos (separados por coma)
+CORS_ORIGINS=http://localhost:3000,http://localhost:8000,http://127.0.0.1:3000,http://127.0.0.1:8000
 ```
 
 Notas:
-- Si no existe `.env`, se usan valores por defecto definidos en el código.
-- Al iniciar, `init_db()` crea base/tablas si no existen y siembra datos base de salones.
+- `DB_PASSWORD` y `JWT_SECRET` son obligatorios.
+- `CORS_ORIGINS` debe contener los dominios que consumen la API.
+- Al iniciar, `init_db()` crea base/tablas si no existen.
 
 Documentación automática:
 - Swagger UI: http://localhost:8000/docs
@@ -62,7 +66,7 @@ Documentación automática:
 ### Auth
 
 - `POST /auth/registro`
-	- Body: `{ "usuario": "...", "password": "..." }`
+	- Body: `{ "nombre": "...", "apellido": "...", "usuario": "...", "correo": "...", "password": "..." }`
 	- Registra usuario nuevo.
 	- Valida contraseña mínima de 6 y sin espacios.
 
@@ -71,8 +75,9 @@ Documentación automática:
 	- Devuelve token JWT.
 
 - `POST /auth/forgot-password`
-	- Body: `{ "usuario": "...", "new_password": "..." }`
-	- Actualiza contraseña del usuario.
+	- Paso 1 (solicitar token): `{ "usuario": "..." }`
+	- Paso 2 (cambiar clave): `{ "usuario": "...", "new_password": "...", "reset_token": "..." }`
+	- Actualiza contraseña con token de verificacion.
 
 ### Salones y reservas
 
@@ -81,7 +86,8 @@ Documentación automática:
 
 - `POST /reservas`
 	- Requiere inicio de sesión. Se debe enviar el token JWT en el header Authorization.
-	- Crea reserva validando disponibilidad y capacidad.
+	- Body: `{ "salon_id": 1, "fecha": "2026-05-09", "franja_horaria_id": 2, "asistentes": 50 }`
+	- Crea reserva validando disponibilidad, capacidad y franja horaria.
 
 - `GET /reservas/mis`
 	- Requiere inicio de sesión. Se debe enviar el token JWT en el header Authorization.
