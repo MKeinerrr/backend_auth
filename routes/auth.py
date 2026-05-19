@@ -78,7 +78,7 @@ def login(data: UsuarioAuth):
         with connection.cursor() as cursor:
             cursor.execute(
                 '''
-                SELECT id_usuario, usuario, correo, clave, estado
+                SELECT id_usuario, usuario, correo, clave, estado, rol
                 FROM usuarios
                 WHERE usuario = %s OR correo = %s
                 ''',
@@ -93,12 +93,14 @@ def login(data: UsuarioAuth):
             raise HTTPException(status_code=403, detail='Usuario inactivo')
 
         subject = user['usuario'] or user['correo']
+        rol = int(user.get('rol', 0) or 0)
         token = create_access_token(user_id=user['id_usuario'], username=subject)
 
         return {
             'success': True,
             'message': 'Autenticación exitosa',
             'usuario': subject,
+            'rol': rol,
             'token': token,
         }
     finally:

@@ -99,16 +99,13 @@ def init_db() -> None:
                     nivel INT,
                     capacidad INT NOT NULL,
                     precio DECIMAL(10, 2) NOT NULL,
-                    slug VARCHAR(200) NOT NULL,
                     foto VARCHAR(255),
-                    video TEXT,
                     descripcion TEXT NOT NULL,
                     politicas TEXT,
                     estado BOOLEAN NOT NULL DEFAULT 1,
                     fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     id_categoria INT NOT NULL,
                     CONSTRAINT salones_pk PRIMARY KEY (id_salon),
-                    CONSTRAINT salones__slug__un UNIQUE (slug),
                     CONSTRAINT salones__nivel__ck CHECK (nivel > 0),
                     CONSTRAINT salones__capacidad__ck CHECK (capacidad > 0),
                     CONSTRAINT salones__precio__ck CHECK (precio >= 0),
@@ -117,6 +114,22 @@ def init_db() -> None:
                         FOREIGN KEY (id_categoria)
                         REFERENCES categorias(id_categoria)
                         ON DELETE RESTRICT ON UPDATE CASCADE
+                )
+                '''
+            )
+
+            cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS salon_fotos (
+                    id_salon_foto INT NOT NULL AUTO_INCREMENT,
+                    id_salon INT NOT NULL,
+                    foto_url VARCHAR(255) NOT NULL,
+                    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT salon_fotos_pk PRIMARY KEY (id_salon_foto),
+                    CONSTRAINT salon_fotos__salon__fk
+                        FOREIGN KEY (id_salon)
+                        REFERENCES salones(id_salon)
+                        ON DELETE CASCADE ON UPDATE CASCADE
                 )
                 '''
             )

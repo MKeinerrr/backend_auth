@@ -46,9 +46,7 @@ class SalonOut(BaseModel):
     nivel: int | None = None
     capacidad: int
     precio: float
-    slug: str
     foto: str | None = None
-    video: str | None = None
     descripcion: str
     politicas: str | None = None
     estado: bool
@@ -56,6 +54,7 @@ class SalonOut(BaseModel):
     categoria: str
     calificacion: float
     badges: list[str]
+    fotos: list[str] = []
 
 
 class ReservaCreate(BaseModel):
@@ -100,6 +99,11 @@ class ReservaHistorialOut(BaseModel):
     abono: float
     notas: str | None = None
     creado_en: datetime
+
+
+class CalificacionCreate(BaseModel):
+    cantidad: int = Field(ge=1, le=5)
+    comentario: str | None = None
 
 
 class CategoriaOut(BaseModel):

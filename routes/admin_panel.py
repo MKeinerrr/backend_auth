@@ -1,7 +1,9 @@
+from pathlib import Path
+from uuid import uuid4
 from typing import Any
 
 import pymysql
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 
 from database import get_db_connection
@@ -39,7 +41,60 @@ def _require_admin(user: dict = Depends(get_current_user)) -> dict:
     return row
 
 
+def _require_super_admin(user: dict = Depends(get_current_user)) -> dict:
+    row = _require_admin(user)
+    rol = int(row.get('rol', 0) or 0)
+    if rol < 3:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Usuario sin permisos',
+        )
+
+    return row
+
+
 router = APIRouter(dependencies=[Depends(_require_admin)])
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+SALON_UPLOAD_DIR = BASE_DIR / 'uploads' / 'salones'
+SALON_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+ALLOWED_IMAGE_TYPES = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+}
+
+
+def _build_public_url(request: Request, relative_path: str) -> str:
+    base = str(request.base_url).rstrip('/')
+    return f'{base}{relative_path}'
+
+
+async def _save_salon_image(
+    salon_id: int,
+    file: UploadFile,
+    request: Request,
+) -> str:
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail='Archivo no valido')
+
+    ext = ALLOWED_IMAGE_TYPES.get(file.content_type)
+    if ext is None:
+        raise HTTPException(status_code=400, detail='Formato de imagen no soportado')
+
+    salon_dir = SALON_UPLOAD_DIR / str(salon_id)
+    salon_dir.mkdir(parents=True, exist_ok=True)
+    filename = f'{uuid4().hex}{ext}'
+    file_path = salon_dir / filename
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail='Archivo vacio')
+
+    file_path.write_bytes(contents)
+
+    relative = f'/uploads/salones/{salon_id}/{filename}'
+    return _build_public_url(request, relative)
 
 
 class UsuarioAdminCreate(BaseModel):
@@ -77,9 +132,7 @@ class SalonAdminCreate(BaseModel):
     precio: float = Field(ge=0)
     nivel: int | None = None
     id_categoria: int = Field(gt=0)
-    slug: str = Field(min_length=1)
     foto: str | None = None
-    video: str | None = None
     descripcion: str = Field(min_length=1)
     politicas: str | None = None
     estado: int = 1
@@ -92,9 +145,7 @@ class SalonAdminUpdate(BaseModel):
     precio: float | None = None
     nivel: int | None = None
     id_categoria: int | None = None
-    slug: str | None = None
     foto: str | None = None
-    video: str | None = None
     descripcion: str | None = None
     politicas: str | None = None
     estado: int | None = None
@@ -211,7 +262,7 @@ def _raise_integrity_error(exc: pymysql.MySQLError) -> None:
 
 
 @router.get('/usuarios')
-def list_usuarios(limit: int | None = None):
+def list_usuarios(limit: int | None = None, user: dict = Depends(_require_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -223,7 +274,7 @@ def list_usuarios(limit: int | None = None):
 
 
 @router.post('/usuarios')
-def create_usuario(payload: UsuarioAdminCreate):
+def create_usuario(payload: UsuarioAdminCreate, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -268,7 +319,7 @@ def create_usuario(payload: UsuarioAdminCreate):
 
 
 @router.put('/usuarios/{usuario_id}')
-def update_usuario(usuario_id: int, payload: UsuarioAdminUpdate):
+def update_usuario(usuario_id: int, payload: UsuarioAdminUpdate, user: dict = Depends(_require_super_admin)):
     data = payload.dict(exclude_unset=True)
     if not data:
         raise HTTPException(status_code=400, detail='No hay campos para actualizar')
@@ -295,7 +346,7 @@ def update_usuario(usuario_id: int, payload: UsuarioAdminUpdate):
 
 
 @router.delete('/usuarios/{usuario_id}')
-def delete_usuario(usuario_id: int):
+def delete_usuario(usuario_id: int, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -307,7 +358,7 @@ def delete_usuario(usuario_id: int):
 
 
 @router.get('/salones')
-def list_salones(limit: int | None = None):
+def list_salones(limit: int | None = None, user: dict = Depends(_require_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -319,7 +370,7 @@ def list_salones(limit: int | None = None):
 
 
 @router.post('/salones')
-def create_salon(payload: SalonAdminCreate):
+def create_salon(payload: SalonAdminCreate, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -331,14 +382,12 @@ def create_salon(payload: SalonAdminCreate):
                     nivel,
                     capacidad,
                     precio,
-                    slug,
                     foto,
-                    video,
                     descripcion,
                     politicas,
                     estado,
                     id_categoria
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ''',
                 (
                     payload.nombre,
@@ -346,17 +395,16 @@ def create_salon(payload: SalonAdminCreate):
                     payload.nivel,
                     payload.capacidad,
                     payload.precio,
-                    payload.slug,
                     payload.foto,
-                    payload.video,
                     payload.descripcion,
                     payload.politicas,
                     payload.estado,
                     payload.id_categoria,
                 ),
             )
+            new_id = cursor.lastrowid
         connection.commit()
-        return {'success': True}
+        return {'success': True, 'id': new_id}
     except pymysql.MySQLError as exc:
         connection.rollback()
         _raise_integrity_error(exc)
@@ -365,7 +413,7 @@ def create_salon(payload: SalonAdminCreate):
 
 
 @router.put('/salones/{salon_id}')
-def update_salon(salon_id: int, payload: SalonAdminUpdate):
+def update_salon(salon_id: int, payload: SalonAdminUpdate, user: dict = Depends(_require_super_admin)):
     data = payload.dict(exclude_unset=True)
     if not data:
         raise HTTPException(status_code=400, detail='No hay campos para actualizar')
@@ -387,7 +435,7 @@ def update_salon(salon_id: int, payload: SalonAdminUpdate):
 
 
 @router.delete('/salones/{salon_id}')
-def delete_salon(salon_id: int):
+def delete_salon(salon_id: int, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -396,6 +444,59 @@ def delete_salon(salon_id: int):
         return {'success': True}
     finally:
         connection.close()
+
+
+@router.post('/salones/{salon_id}/foto-principal')
+async def upload_salon_main_photo(
+    salon_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    user: dict = Depends(_require_super_admin),
+):
+    url = await _save_salon_image(salon_id, file, request)
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'UPDATE salones SET foto = %s WHERE id_salon = %s',
+                (url, salon_id),
+            )
+        connection.commit()
+        return {'url': url}
+    finally:
+        connection.close()
+
+
+@router.post('/salones/{salon_id}/galeria')
+async def upload_salon_gallery(
+    salon_id: int,
+    request: Request,
+    files: list[UploadFile] = File(...),
+    user: dict = Depends(_require_super_admin),
+):
+    if not files:
+        raise HTTPException(status_code=400, detail='No se recibieron archivos')
+
+    urls: list[str] = []
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            for file in files:
+                url = await _save_salon_image(salon_id, file, request)
+                cursor.execute(
+                    'INSERT INTO salon_fotos (id_salon, foto_url) VALUES (%s, %s)',
+                    (salon_id, url),
+                )
+                urls.append(url)
+        connection.commit()
+    except pymysql.MySQLError as exc:
+        connection.rollback()
+        _raise_integrity_error(exc)
+    finally:
+        connection.close()
+
+    return {'urls': urls}
 
 
 @router.get('/reservas')
@@ -505,7 +606,7 @@ def delete_reserva(reserva_id: int):
 
 
 @router.get('/calificaciones')
-def list_calificaciones(limit: int | None = None):
+def list_calificaciones(limit: int | None = None, user: dict = Depends(_require_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -517,7 +618,7 @@ def list_calificaciones(limit: int | None = None):
 
 
 @router.delete('/calificaciones/{calificacion_id}')
-def delete_calificacion(calificacion_id: int):
+def delete_calificacion(calificacion_id: int, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -532,7 +633,7 @@ def delete_calificacion(calificacion_id: int):
 
 
 @router.get('/categorias')
-def list_categorias(limit: int | None = None):
+def list_categorias(limit: int | None = None, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -544,7 +645,7 @@ def list_categorias(limit: int | None = None):
 
 
 @router.post('/categorias')
-def create_categoria(payload: CategoriaAdminCreate):
+def create_categoria(payload: CategoriaAdminCreate, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -562,7 +663,7 @@ def create_categoria(payload: CategoriaAdminCreate):
 
 
 @router.put('/categorias/{categoria_id}')
-def update_categoria(categoria_id: int, payload: CategoriaAdminUpdate):
+def update_categoria(categoria_id: int, payload: CategoriaAdminUpdate, user: dict = Depends(_require_super_admin)):
     data = payload.dict(exclude_unset=True)
     if not data:
         raise HTTPException(status_code=400, detail='No hay campos para actualizar')
@@ -587,7 +688,7 @@ def update_categoria(categoria_id: int, payload: CategoriaAdminUpdate):
 
 
 @router.delete('/categorias/{categoria_id}')
-def delete_categoria(categoria_id: int):
+def delete_categoria(categoria_id: int, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -599,7 +700,7 @@ def delete_categoria(categoria_id: int):
 
 
 @router.get('/franjas-horarias')
-def list_franjas(limit: int | None = None):
+def list_franjas(limit: int | None = None, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -611,7 +712,7 @@ def list_franjas(limit: int | None = None):
 
 
 @router.post('/franjas-horarias')
-def create_franja(payload: FranjaAdminCreate):
+def create_franja(payload: FranjaAdminCreate, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -632,7 +733,7 @@ def create_franja(payload: FranjaAdminCreate):
 
 
 @router.put('/franjas-horarias/{franja_id}')
-def update_franja(franja_id: int, payload: FranjaAdminUpdate):
+def update_franja(franja_id: int, payload: FranjaAdminUpdate, user: dict = Depends(_require_super_admin)):
     data = payload.dict(exclude_unset=True)
     if not data:
         raise HTTPException(status_code=400, detail='No hay campos para actualizar')
@@ -657,7 +758,7 @@ def update_franja(franja_id: int, payload: FranjaAdminUpdate):
 
 
 @router.delete('/franjas-horarias/{franja_id}')
-def delete_franja(franja_id: int):
+def delete_franja(franja_id: int, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -672,7 +773,7 @@ def delete_franja(franja_id: int):
 
 
 @router.get('/metodos')
-def list_metodos(limit: int | None = None):
+def list_metodos(limit: int | None = None, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -684,7 +785,7 @@ def list_metodos(limit: int | None = None):
 
 
 @router.post('/metodos')
-def create_metodo(payload: MetodoAdminCreate):
+def create_metodo(payload: MetodoAdminCreate, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -702,7 +803,7 @@ def create_metodo(payload: MetodoAdminCreate):
 
 
 @router.put('/metodos/{metodo_id}')
-def update_metodo(metodo_id: int, payload: MetodoAdminUpdate):
+def update_metodo(metodo_id: int, payload: MetodoAdminUpdate, user: dict = Depends(_require_super_admin)):
     data = payload.dict(exclude_unset=True)
     if not data:
         raise HTTPException(status_code=400, detail='No hay campos para actualizar')
@@ -727,7 +828,7 @@ def update_metodo(metodo_id: int, payload: MetodoAdminUpdate):
 
 
 @router.delete('/metodos/{metodo_id}')
-def delete_metodo(metodo_id: int):
+def delete_metodo(metodo_id: int, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -739,7 +840,7 @@ def delete_metodo(metodo_id: int):
 
 
 @router.get('/periodos-cierre')
-def list_cierres(limit: int | None = None):
+def list_cierres(limit: int | None = None, user: dict = Depends(_require_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -751,7 +852,7 @@ def list_cierres(limit: int | None = None):
 
 
 @router.post('/periodos-cierre')
-def create_cierre(payload: CierreAdminCreate):
+def create_cierre(payload: CierreAdminCreate, user: dict = Depends(_require_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -772,7 +873,7 @@ def create_cierre(payload: CierreAdminCreate):
 
 
 @router.put('/periodos-cierre/{cierre_id}')
-def update_cierre(cierre_id: int, payload: CierreAdminUpdate):
+def update_cierre(cierre_id: int, payload: CierreAdminUpdate, user: dict = Depends(_require_admin)):
     data = payload.dict(exclude_unset=True)
     if not data:
         raise HTTPException(status_code=400, detail='No hay campos para actualizar')
@@ -797,7 +898,7 @@ def update_cierre(cierre_id: int, payload: CierreAdminUpdate):
 
 
 @router.delete('/periodos-cierre/{cierre_id}')
-def delete_cierre(cierre_id: int):
+def delete_cierre(cierre_id: int, user: dict = Depends(_require_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -812,7 +913,7 @@ def delete_cierre(cierre_id: int):
 
 
 @router.get('/empresa')
-def get_empresa():
+def get_empresa(user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -824,7 +925,7 @@ def get_empresa():
 
 
 @router.put('/empresa')
-def update_empresa(payload: EmpresaUpdate):
+def update_empresa(payload: EmpresaUpdate, user: dict = Depends(_require_super_admin)):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:

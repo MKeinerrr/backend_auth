@@ -1,10 +1,11 @@
 from datetime import date
 from uuid import uuid4
 
+import pymysql
 from fastapi import APIRouter, Depends, HTTPException
 
 from database import get_db_connection
-from models import ReservaCreate, ReservaHistorialOut, ReservaOut, SalonOut
+from models import CalificacionCreate, ReservaCreate, ReservaHistorialOut, ReservaOut, SalonOut
 from utils.security import get_current_user
 
 router = APIRouter()
@@ -24,9 +25,7 @@ def listar_salones():
                     s.nivel,
                     s.capacidad,
                     s.precio,
-                    s.slug,
                     s.foto,
-                    s.video,
                     s.descripcion,
                     s.politicas,
                     s.estado,
@@ -35,10 +34,14 @@ def listar_salones():
                     AVG(cal.cantidad) AS calificacion,
                     GROUP_CONCAT(
                         sb.badge ORDER BY sb.id_salon_badge SEPARATOR '||'
-                    ) AS badges_concat
+                    ) AS badges_concat,
+                    GROUP_CONCAT(
+                        sf.foto_url ORDER BY sf.id_salon_foto SEPARATOR '||'
+                    ) AS fotos_concat
                 FROM salones s
                 INNER JOIN categorias c ON c.id_categoria = s.id_categoria
                 LEFT JOIN salon_badges sb ON sb.id_salon = s.id_salon
+                LEFT JOIN salon_fotos sf ON sf.id_salon = s.id_salon
                 LEFT JOIN calificaciones cal ON cal.id_salon = s.id_salon
                 WHERE s.estado = 1
                 GROUP BY
@@ -48,9 +51,7 @@ def listar_salones():
                     s.nivel,
                     s.capacidad,
                     s.precio,
-                    s.slug,
                     s.foto,
-                    s.video,
                     s.descripcion,
                     s.politicas,
                     s.estado,
@@ -68,6 +69,11 @@ def listar_salones():
             if isinstance(raw_badges, str) and raw_badges.strip():
                 badges = [badge for badge in raw_badges.split('||') if badge]
 
+            raw_fotos = row.get('fotos_concat')
+            fotos = []
+            if isinstance(raw_fotos, str) and raw_fotos.strip():
+                fotos = [foto for foto in raw_fotos.split('||') if foto]
+
             calificacion_raw = row.get('calificacion')
 
             response.append(
@@ -78,9 +84,7 @@ def listar_salones():
                     nivel=int(row['nivel']) if row['nivel'] is not None else None,
                     capacidad=int(row['capacidad']),
                     precio=float(row['precio']),
-                    slug=row['slug'],
                     foto=row.get('foto'),
-                    video=row.get('video'),
                     descripcion=row['descripcion'],
                     politicas=row.get('politicas'),
                     estado=bool(row['estado']),
@@ -88,10 +92,98 @@ def listar_salones():
                     categoria=row['categoria'],
                     calificacion=float(calificacion_raw) if calificacion_raw is not None else 0.0,
                     badges=[str(badge) for badge in badges],
+                    fotos=[str(foto) for foto in fotos],
                 )
             )
 
         return response
+    finally:
+        connection.close()
+
+
+@router.get('/salones/{salon_id}', response_model=SalonOut)
+def obtener_salon(salon_id: int):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                '''
+                SELECT
+                    s.id_salon,
+                    s.nombre,
+                    s.zona,
+                    s.nivel,
+                    s.capacidad,
+                    s.precio,
+                    s.foto,
+                    s.descripcion,
+                    s.politicas,
+                    s.estado,
+                    s.id_categoria,
+                    c.nombre AS categoria,
+                    AVG(cal.cantidad) AS calificacion,
+                    GROUP_CONCAT(
+                        sb.badge ORDER BY sb.id_salon_badge SEPARATOR '||'
+                    ) AS badges_concat,
+                    GROUP_CONCAT(
+                        sf.foto_url ORDER BY sf.id_salon_foto SEPARATOR '||'
+                    ) AS fotos_concat
+                FROM salones s
+                INNER JOIN categorias c ON c.id_categoria = s.id_categoria
+                LEFT JOIN salon_badges sb ON sb.id_salon = s.id_salon
+                LEFT JOIN salon_fotos sf ON sf.id_salon = s.id_salon
+                LEFT JOIN calificaciones cal ON cal.id_salon = s.id_salon
+                WHERE s.id_salon = %s
+                GROUP BY
+                    s.id_salon,
+                    s.nombre,
+                    s.zona,
+                    s.nivel,
+                    s.capacidad,
+                    s.precio,
+                    s.foto,
+                    s.descripcion,
+                    s.politicas,
+                    s.estado,
+                    s.id_categoria,
+                    c.nombre
+                ''',
+                (salon_id,),
+            )
+            row = cursor.fetchone()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail='Salon no encontrado')
+
+        raw_badges = row.get('badges_concat')
+        badges = []
+        if isinstance(raw_badges, str) and raw_badges.strip():
+            badges = [badge for badge in raw_badges.split('||') if badge]
+
+        raw_fotos = row.get('fotos_concat')
+        fotos = []
+        if isinstance(raw_fotos, str) and raw_fotos.strip():
+            fotos = [foto for foto in raw_fotos.split('||') if foto]
+
+        calificacion_raw = row.get('calificacion')
+
+        return SalonOut(
+            id=int(row['id_salon']),
+            nombre=row['nombre'],
+            zona=row['zona'],
+            nivel=int(row['nivel']) if row['nivel'] is not None else None,
+            capacidad=int(row['capacidad']),
+            precio=float(row['precio']),
+            foto=row.get('foto'),
+            descripcion=row['descripcion'],
+            politicas=row.get('politicas'),
+            estado=bool(row['estado']),
+            categoria_id=int(row['id_categoria']),
+            categoria=row['categoria'],
+            calificacion=float(calificacion_raw) if calificacion_raw is not None else 0.0,
+            badges=[str(badge) for badge in badges],
+            fotos=[str(foto) for foto in fotos],
+        )
     finally:
         connection.close()
 
@@ -270,6 +362,42 @@ def crear_reserva(data: ReservaCreate, user: dict = Depends(get_current_user)):
         connection.close()
 
 
+@router.post('/salones/{salon_id}/calificaciones')
+def crear_calificacion(
+    salon_id: int,
+    payload: CalificacionCreate,
+    user: dict = Depends(get_current_user),
+):
+    comentario = payload.comentario.strip() if payload.comentario else None
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                '''
+                INSERT INTO calificaciones (cantidad, comentario, id_salon, id_usuario)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    cantidad = VALUES(cantidad),
+                    comentario = VALUES(comentario),
+                    fecha = CURRENT_TIMESTAMP
+                ''',
+                (
+                    int(payload.cantidad),
+                    comentario,
+                    salon_id,
+                    int(user['user_id']),
+                ),
+            )
+        connection.commit()
+        return {'success': True}
+    except pymysql.MySQLError as exc:
+        connection.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        connection.close()
+
+
 @router.get('/reservas/mis', response_model=list[ReservaHistorialOut])
 def listar_mis_reservas(user: dict = Depends(get_current_user)):
     connection = get_db_connection()
@@ -318,5 +446,44 @@ def listar_mis_reservas(user: dict = Depends(get_current_user)):
             )
             for row in rows
         ]
+    finally:
+        connection.close()
+
+
+@router.post('/reservas/{reserva_id}/cancelar')
+def cancelar_reserva(reserva_id: int, user: dict = Depends(get_current_user)):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                '''
+                SELECT id_reserva, estado, id_usuario
+                FROM reservas
+                WHERE id_reserva = %s
+                ''',
+                (reserva_id,),
+            )
+            reserva = cursor.fetchone()
+
+            if reserva is None:
+                raise HTTPException(status_code=404, detail='Reserva no encontrada')
+
+            if int(reserva['id_usuario']) != int(user['user_id']):
+                raise HTTPException(status_code=403, detail='No tienes permisos')
+
+            estado = str(reserva['estado'])
+            if estado not in ('Pendiente', 'Confirmada'):
+                raise HTTPException(
+                    status_code=400,
+                    detail='La reserva no se puede cancelar',
+                )
+
+            cursor.execute(
+                'UPDATE reservas SET estado = %s WHERE id_reserva = %s',
+                ('Cancelada', reserva_id),
+            )
+
+        connection.commit()
+        return {'success': True}
     finally:
         connection.close()
